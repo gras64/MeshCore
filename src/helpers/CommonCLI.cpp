@@ -87,7 +87,9 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->discovery_mod_timestamp, sizeof(_prefs->discovery_mod_timestamp)); // 162
     file.read((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
     file.read((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));                          // 170
-    file.read((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
+    // optional: channel buffer size (new in vX)
+    file.read((uint8_t *)&_prefs->channel_buffer_size, sizeof(_prefs->channel_buffer_size));      // 290
+    file.read((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 291
     // next: 291
 
     // sanitise bad pref values
@@ -178,7 +180,9 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->discovery_mod_timestamp, sizeof(_prefs->discovery_mod_timestamp)); // 162
     file.write((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
     file.write((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));                          // 170
-    file.write((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
+    // optional: channel buffer size (new in vX)
+    file.write((uint8_t *)&_prefs->channel_buffer_size, sizeof(_prefs->channel_buffer_size));      // 290
+    file.write((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 291
     // next: 291
 
     file.close();
@@ -725,6 +729,37 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       _prefs->adc_multiplier = 0.0f;
       strcpy(reply, "Error: unsupported by this board");
     };
+  } else if (memcmp(config, "channel ", 8) == 0) {
+    char tmp[160];
+    strcpy(tmp, &config[8]);
+    const char* parts[4];
+    int n = mesh::Utils::parseTextParts(tmp, parts, 4, ' ');
+    if (n >= 1 && strcmp(parts[0], "create") == 0 && n >= 2) {
+      const char* name = parts[1];
+      const char* hexkey = (n >= 3) ? parts[2] : NULL;
+      if (_callbacks->createChannel(name, hexkey)) {
+        strcpy(reply, "OK");
+      } else {
+        strcpy(reply, "Err - create failed");
+      }
+    } else if (n >= 2 && strcmp(parts[0], "delete") == 0) {
+      if (_callbacks->deleteChannel(parts[1])) {
+        strcpy(reply, "OK");
+      } else {
+        strcpy(reply, "Err - delete failed");
+      }
+    } else if (n >= 1 && strcmp(parts[0], "save") == 0) {
+      if (_callbacks->saveChannels()) strcpy(reply, "OK"); else strcpy(reply, "Err - save failed");
+    } else if (n >= 2 && strcmp(parts[0], "buffer") == 0) {
+      int val = atoi(parts[1]);
+      if (val < 1) val = 1;
+      if (val > 255) val = 255;
+      _prefs->channel_buffer_size = (uint8_t)val;
+      savePrefs();
+      sprintf(reply, "OK - buffer=%d", val);
+    } else {
+      strcpy(reply, "Err - channel usage: create|delete|save");
+    }
   } else {
     sprintf(reply, "unknown config: %s", config);
   }
@@ -781,6 +816,10 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->tx_delay_factor));
   } else if (memcmp(config, "flood.max", 9) == 0) {
     sprintf(reply, "> %d", (uint32_t)_prefs->flood_max);
+  } else if (memcmp(config, "channels", 8) == 0) {
+    _callbacks->formatChannelsReply(reply);
+  } else if (memcmp(config, "channel buffer", 14) == 0) {
+    sprintf(reply, "> %d", (uint32_t)_prefs->channel_buffer_size);
   } else if (memcmp(config, "direct.txdelay", 14) == 0) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->direct_tx_delay_factor));
   } else if (memcmp(config, "owner.info", 10) == 0) {

@@ -38,13 +38,28 @@ struct ServerStats {
   uint16_t n_posted, n_post_push;
 };
 
-void MyMesh::addPost(ClientInfo *client, const char *postData) {
+void MyMesh::addPost(ClientInfo *client, const char *postData, int channel_idx) {
   // TODO: suggested postData format: <title>/<descrption>
   posts[next_post_idx].author = client->id; // add to cyclic queue
   StrHelper::strncpy(posts[next_post_idx].text, postData, MAX_POST_TEXT_LEN);
+  posts[next_post_idx].channel_id = (channel_idx >= 0) ? (uint8_t)channel_idx : 0xFF;
 
   posts[next_post_idx].post_timestamp = getRTCClock()->getCurrentTimeUnique();
+  // remember index of newly written post (it will become next_post_idx after increment)
+  int written_idx = next_post_idx;
   next_post_idx = (next_post_idx + 1) % MAX_UNSYNCED_POSTS;
+
+#ifdef MAX_GROUP_CHANNELS
+  // store recent channel posts in volatile per-channel buffer (if public)
+  if (channel_idx >= 0 && channel_idx < MAX_GROUP_CHANNELS) {
+    if (channel_store.isPublic(channel_idx)) {
+      int buf_limit = constrain(_prefs.channel_buffer_size, 1, CHANNEL_BUFFER_SIZE);
+      int bi = channel_buffer_next_idx[channel_idx] % buf_limit;
+      channel_buffers[channel_idx][bi] = posts[written_idx];
+      channel_buffer_next_idx[channel_idx] = (uint8_t)((bi + 1) % buf_limit);
+    }
+  }
+#endif
 
   next_push = futureMillis(PUSH_NOTIFY_DELAY_MILLIS);
   _num_posted++; // stats
@@ -95,7 +110,18 @@ uint8_t MyMesh::getUnsyncedCount(ClientInfo *client) {
   for (int k = 0; k < MAX_UNSYNCED_POSTS; k++) {
     if (posts[k].post_timestamp > client->extra.room.sync_since // is new post for this Client?
         && !posts[k].author.matches(client->id)) {   // don't push posts to the author
-      count++;
+      bool visible = true;
+#ifdef MAX_GROUP_CHANNELS
+      if (posts[k].channel_id != 0xFF) {
+        int ch = posts[k].channel_id;
+        if (!channel_store.isPublic(ch)) {
+          int byteidx = ch / 8;
+          int bit = ch % 8;
+          if ((client->extra.room.channel_subscribe_mask[byteidx] & (1 << bit)) == 0) visible = false;
+        }
+      }
+#endif
+      if (visible) count++;
     }
   }
   return count;
@@ -374,13 +400,43 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
 
     next_push = futureMillis(PUSH_NOTIFY_DELAY_MILLIS); // delay next push, give RESPONSE packet time to arrive first
 
+    int reply_len = 13;
+#ifdef MAX_GROUP_CHANNELS
+    // append a short channel overview after the login response
+    // Format: "<N> channels\n0 room\n1 <name>\n2 <name>\n..."
+    char *p = (char *)&reply_data[reply_len];
+    int rem = MAX_PACKET_PAYLOAD - reply_len;
+    int used = 0;
+    if (rem > 0) {
+      int stored = channel_store.getNumChannels();
+      // total channels includes the implicit 'room' channel
+      int total = stored + 1;
+      int n = snprintf(p + used, max(0, rem - used), "%d channels\n", total);
+      if (n > 0) used += n;
+      if (used < rem) {
+        n = snprintf(p + used, max(0, rem - used), "0 room\n");
+        if (n > 0) used += n;
+      }
+      for (int i = 0; i < stored && used < rem - 8; i++) {
+        const ChannelDetails* cd = channel_store.getChannel(i);
+        if (!cd) continue;
+        n = snprintf(p + used, max(0, rem - used), "%d %s\n", i + 1, cd->name);
+        if (n > 0) used += n;
+      }
+      // Print to server serial as well for immediate visibility
+      Serial.println("Client logged in - Channels:");
+      Serial.println(p);
+      reply_len += used;
+    }
+#endif
+
     if (packet->isRouteFlood()) {
       // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the response
       mesh::Packet *path = createPathReturn(sender, client->shared_secret, packet->path, packet->path_len,
-                                            PAYLOAD_TYPE_RESPONSE, reply_data, 13);
+                                            PAYLOAD_TYPE_RESPONSE, reply_data, reply_len);
       if (path) sendFloodReply(path, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
     } else {
-      mesh::Packet *reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, client->shared_secret, reply_data, 13);
+      mesh::Packet *reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, client->shared_secret, reply_data, reply_len);
       if (reply) {
         if (client->out_path_len != OUT_PATH_UNKNOWN) { // we have an out_path, so send DIRECT
           sendDirect(reply, client->out_path, client->out_path_len, SERVER_RESPONSE_DELAY);
@@ -389,6 +445,11 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
         }
       }
     }
+#ifdef MAX_GROUP_CHANNELS
+    // Do NOT push buffered channel posts immediately on login - show channels instead.
+    // Buffered posts will be delivered by the regular push loop.
+    MESH_DEBUG_PRINTLN("Login - skipping immediate buffered post push (show channels)");
+#endif
   }
 }
 
@@ -464,7 +525,29 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           send_ack = false; // no ACK
         } else {
           if (!is_retry) {
-            addPost(client, (const char *)&data[5]);
+            // detect channel prefix: messages starting with '#channelname ' are channel posts
+            const char* txt = (const char *)&data[5];
+            if (txt[0] == '#') {
+              char cname[32]; int ci = 1; int ni = 0;
+              while (txt[ci] && txt[ci] != ' ' && txt[ci] != '\t' && ni < (int)sizeof(cname)-1) {
+                cname[ni++] = txt[ci++];
+              }
+              cname[ni] = 0;
+              if (ni > 0) {
+                int chidx = channel_store.findByNamePrefix(cname);
+                const char* rest = txt + ci;
+                while (*rest == ' ' || *rest == '\t') rest++;
+                if (chidx >= 0) {
+                  addPost(client, rest, chidx);
+                } else {
+                  addPost(client, txt, -1);
+                }
+              } else {
+                addPost(client, txt, -1);
+              }
+            } else {
+              addPost(client, (const char *)&data[5], -1);
+            }
           }
           temp[5] = 0; // no reply (ACK is enough)
           send_ack = true;
@@ -653,10 +736,20 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
 
+  _prefs.channel_buffer_size = CHANNEL_BUFFER_SIZE;
+
   next_post_idx = 0;
   next_client_idx = 0;
   next_push = 0;
   memset(posts, 0, sizeof(posts));
+#ifdef MAX_GROUP_CHANNELS
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    channel_buffer_next_idx[i] = 0;
+    for (int j = 0; j < CHANNEL_BUFFER_SIZE; j++) {
+      memset(&channel_buffers[i][j], 0, sizeof(PostInfo));
+    }
+  }
+#endif
   _num_posted = _num_post_pushes = 0;
 
   memset(default_scope.key, 0, sizeof(default_scope.key));
@@ -669,6 +762,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _cli.loadPrefs(_fs);
 
   acl.load(_fs, self_id);
+  channel_store.load(_fs);
   region_map.load(_fs);
 
   // establish default-scope
@@ -701,6 +795,75 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
+#endif
+}
+
+void MyMesh::formatChannelsReply(char *reply) {
+#ifdef MAX_GROUP_CHANNELS
+  int ofs = 0;
+  int rem = MAX_PACKET_PAYLOAD;
+  int stored = channel_store.getNumChannels();
+  int total = stored + 1; // include implicit 'room' channel
+  int n = snprintf(reply + ofs, max(0, rem - ofs), "%d channels\n", total);
+  if (n > 0) ofs += n;
+  if (ofs < rem) {
+    n = snprintf(reply + ofs, max(0, rem - ofs), "0 room\n");
+    if (n > 0) ofs += n;
+  }
+  for (int i = 0; i < stored && ofs < rem - 8; i++) {
+    const ChannelDetails* cd = channel_store.getChannel(i);
+    if (!cd) continue;
+    n = snprintf(reply + ofs, max(0, rem - ofs), "%d %s\n", i + 1, cd->name);
+    if (n > 0) ofs += n;
+  }
+  if (ofs < rem) reply[ofs] = 0;
+#else
+  strcpy(reply, "Channels unsupported");
+#endif
+}
+
+bool MyMesh::createChannel(const char* name, const char* hexkey) {
+#ifdef MAX_GROUP_CHANNELS
+  uint8_t keybuf[32];
+  int keylen = 0;
+  if (hexkey && hexkey[0]) {
+    int hexlen = strlen(hexkey);
+    for (int i = 0; i + 1 < hexlen && keylen < (int)sizeof(keybuf); i += 2) {
+      char pair[3] = { hexkey[i], hexkey[i + 1], 0 };
+      keybuf[keylen++] = (uint8_t)strtol(pair, NULL, 16);
+    }
+  } else {
+    keylen = 16;
+    getRNG()->random(keybuf, keylen);
+  }
+  int idx = channel_store.addChannel(name, keybuf, keylen, 1);
+  if (idx >= 0) {
+    channel_store.save(_fs);
+    return true;
+  }
+#endif
+  return false;
+}
+
+bool MyMesh::deleteChannel(const char* name) {
+#ifdef MAX_GROUP_CHANNELS
+  int idx = channel_store.findByNamePrefix(name);
+  if (idx >= 0) {
+    if (channel_store.removeChannelByIdx(idx)) {
+      channel_store.save(_fs);
+      return true;
+    }
+  }
+#endif
+  return false;
+}
+
+bool MyMesh::saveChannels() {
+#ifdef MAX_GROUP_CHANNELS
+  channel_store.save(_fs);
+  return true;
+#else
+  return false;
 #endif
 }
 
@@ -962,6 +1125,18 @@ void MyMesh::loop() {
         if (now >= p->post_timestamp + POST_SYNC_DELAY_SECS &&
             p->post_timestamp > client->extra.room.sync_since // is new post for this Client?
             && !p->author.matches(client->id)) {   // don't push posts to the author
+          bool visible = true;
+#ifdef MAX_GROUP_CHANNELS
+          if (p->channel_id != 0xFF) {
+            int ch = p->channel_id;
+            if (!channel_store.isPublic(ch)) {
+              int byteidx = ch / 8;
+              int bit = ch % 8;
+              if ((client->extra.room.channel_subscribe_mask[byteidx] & (1 << bit)) == 0) visible = false;
+            }
+          }
+#endif
+          if (!visible) { idx = (idx + 1) % MAX_UNSYNCED_POSTS; continue; }
           // push this post to Client, then wait for ACK
           pushPostToClient(client, *p);
           did_push = true;

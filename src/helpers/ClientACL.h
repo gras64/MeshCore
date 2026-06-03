@@ -27,6 +27,10 @@ struct ClientInfo {
       uint32_t push_post_timestamp;
       unsigned long ack_timeout;
       uint8_t  push_failures;
+#ifdef MAX_GROUP_CHANNELS
+      // per-client subscription bitmask for channels (not persisted by ClientACL save/load)
+      uint8_t channel_subscribe_mask[(MAX_GROUP_CHANNELS + 7) / 8];
+#endif
     } room;
   } extra;
   

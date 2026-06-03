@@ -27,6 +27,7 @@ bool StrHelper::isBlank(const char* str) {
 }
 
 #include <Arduino.h>
+#include <ctype.h>
 
 union int32_Float_t 
 {
@@ -171,4 +172,17 @@ uint32_t StrHelper::fromHex(const char* src) {
     src++;
   }
   return n;
+}
+
+bool StrHelper::startsWith(const char* s, const char* prefix) {
+  if (!s || !prefix) return false;
+  while (*prefix) {
+    if (*s == 0) return false;
+    char a = *s, b = *prefix;
+    if (a >= 'A' && a <= 'Z') a = a - 'A' + 'a';
+    if (b >= 'A' && b <= 'Z') b = b - 'A' + 'a';
+    if (a != b) return false;
+    s++; prefix++;
+  }
+  return true;
 }

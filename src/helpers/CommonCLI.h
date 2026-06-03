@@ -58,6 +58,7 @@ struct NodePrefs { // persisted to file
   uint32_t discovery_mod_timestamp;
   float adc_multiplier;
   char owner_info[120];
+  uint8_t channel_buffer_size; // number of buffered posts per channel (1..CHANNEL_BUFFER_SIZE)
   uint8_t rx_boosted_gain; // power settings
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
@@ -97,6 +98,20 @@ public:
   }
   virtual void onDefaultRegionChanged(const RegionEntry* r) {
     // no op by default
+  }
+
+  // Channel management (Room Server)
+  virtual void formatChannelsReply(char *reply) {
+    // no op by default
+  }
+  virtual bool createChannel(const char* name, const char* hexkey) {
+    return false;
+  }
+  virtual bool deleteChannel(const char* name) {
+    return false;
+  }
+  virtual bool saveChannels() {
+    return false;
   }
 
   virtual void setBridgeState(bool enable) {

@@ -20,6 +20,7 @@
 #include <helpers/CommonCLI.h>
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/ClientACL.h>
+#include <helpers/ChannelStore.h>
 #include <helpers/RegionMap.h>
 #include <RTClib.h>
 #include <target.h>
@@ -86,6 +87,7 @@ struct PostInfo {
   mesh::Identity author;
   uint32_t post_timestamp;   // by OUR clock
   char text[MAX_POST_TEXT_LEN+1];
+  uint8_t channel_id; // INDEX into ChannelStore, 0xFF = none
 };
 
 class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
@@ -99,6 +101,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   TransportKeyStore key_store;
   RegionMap region_map, temp_map;
   ClientACL acl;
+  ChannelStore channel_store;
   CommonCLI _cli;
   unsigned long dirty_contacts_expiry;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
@@ -107,6 +110,15 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   int next_client_idx;  // for round-robin polling
   int next_post_idx;
   PostInfo posts[MAX_UNSYNCED_POSTS];   // cyclic queue
+  
+#ifdef MAX_GROUP_CHANNELS
+  #ifndef CHANNEL_BUFFER_SIZE
+    #define CHANNEL_BUFFER_SIZE 8
+  #endif
+  // per-channel volatile (RAM) buffer of recent posts
+  PostInfo channel_buffers[MAX_GROUP_CHANNELS][CHANNEL_BUFFER_SIZE];
+  uint8_t channel_buffer_next_idx[MAX_GROUP_CHANNELS]; // next write index per channel
+#endif
   CayenneLPP telemetry;
   RegionEntry* load_stack[8];
   RegionEntry* recv_pkt_region;
@@ -118,7 +130,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t pending_cr;
   int  matching_peer_indexes[MAX_CLIENTS];
 
-  void addPost(ClientInfo* client, const char* postData);
+  void addPost(ClientInfo* client, const char* postData, int channel_idx = -1);
   void pushPostToClient(ClientInfo* client, PostInfo& post);
   uint8_t getUnsyncedCount(ClientInfo* client);
   bool processAck(const uint8_t *data);
@@ -213,6 +225,12 @@ public:
   void startRegionsLoad() override;
   bool saveRegions() override;
   void onDefaultRegionChanged(const RegionEntry* r) override;
+
+  // Channel callbacks
+  void formatChannelsReply(char *reply) override;
+  bool createChannel(const char* name, const char* hexkey) override;
+  bool deleteChannel(const char* name) override;
+  bool saveChannels() override;
 
   mesh::LocalIdentity& getSelfId() override { return self_id; }
 

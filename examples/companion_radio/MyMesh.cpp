@@ -125,6 +125,8 @@
 #define PUSH_CODE_CONTROL_DATA          0x8E   // v8+
 #define PUSH_CODE_CONTACT_DELETED       0x8F // used to notify client app of deleted contact when overwriting oldest
 #define PUSH_CODE_CONTACTS_FULL         0x90 // used to notify client app that contacts storage is full
+// New: pushed channel list after successful login (optional, vX+)
+#define PUSH_CODE_CHANNEL_LIST          0x91
 
 #define ERR_CODE_UNSUPPORTED_CMD        1
 #define ERR_CODE_NOT_FOUND              2
@@ -287,7 +289,6 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
     out_frame[i++] = (int8_t)(rssi);
     memcpy(&out_frame[i], raw, len);
     i += len;
-
     _serial->writeFrame(out_frame, i);
   }
 }
@@ -690,6 +691,16 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
       i += 6; // pub_key_prefix
     }
     _serial->writeFrame(out_frame, i);
+    // If server appended an ASCII channel overview starting at offset 13, forward it
+    // as a separate PUSH frame so companion apps can display channel list on login.
+    if (len > 13 && _serial->isConnected()) {
+      int chlen = (int)len - 13;
+      if (chlen > (int)(MAX_FRAME_SIZE - 2)) chlen = (int)(MAX_FRAME_SIZE - 2); // reserve 1 byte for code and 1 for NUL
+      out_frame[0] = PUSH_CODE_CHANNEL_LIST;
+      memcpy(&out_frame[1], &data[13], chlen);
+      out_frame[1 + chlen] = '\0';
+      _serial->writeFrame(out_frame, 1 + chlen + 1);
+    }
   } else if (len > 4 && // check for status response
              pending_status &&
              memcmp(&pending_status, contact.id.pub_key, 4) == 0 // legacy matching scheme
