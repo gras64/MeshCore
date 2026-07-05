@@ -939,33 +939,30 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       Serial.printf("\n");
     }
     reply[0] = 0;
-  } else if (memcmp(command, "stress", 6) == 0) {
-    const char* sub = command + 6;
+  } else if (memcmp(command, "get stress", 10) == 0) {
+    // get stress [live|daily|weekly]
+    const char* sub = command + 10;
     while (*sub == ' ') sub++;
+    
+    char* window_arg = NULL;
     
     char args_buf[64];
     strncpy(args_buf, sub, sizeof(args_buf) - 1);
     args_buf[sizeof(args_buf) - 1] = 0;
     
     char* token = strtok(args_buf, " ");
-    char* node_arg = token;
-    token = strtok(NULL, " ");
-    char* window_arg = token;
+    if (token) window_arg = token;
     
-    uint8_t window = 1;
+    uint8_t window = 1;  // default: daily
     if (window_arg) {
       if (strcmp(window_arg, "live") == 0) window = 0;
       else if (strcmp(window_arg, "weekly") == 0) window = 2;
     }
     
-    if (node_arg) {
-      // Node hash argument ignored - local node only
-      _stress.formatLocalStressReply(reply, window);
-    } else {
-      _stress.formatLocalStressReply(reply, window);
-    }
-  } else if (memcmp(command, "stress.smoothing", 16) == 0) {
-    const char* sub = command + 16;
+    _stress.formatLocalStressReply(reply, window);
+  } else if (memcmp(command, "set stress.smoothing", 20) == 0) {
+    // set stress.smoothing [sharp|balanced|stable]
+    const char* sub = command + 20;
     while (*sub == ' ') sub++;
     
     if (strcmp(sub, "sharp") == 0) {
@@ -978,7 +975,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       _stress.setSmoothing(SMOOTH_BALANCED);
       strcpy(reply, "OK - smoothing: balanced");
     }
-  } else if (memcmp(command, "stress.clear", 12) == 0) {
+  } else if (memcmp(command, "set stress.clear", 16) == 0) {
     _stress.clear();
     strcpy(reply, "OK - stress data cleared");
   } else {
@@ -1082,13 +1079,13 @@ void MyMesh::loop() {
 /* =========================== Stress / Observability =========================== */
 
 void MyMesh::updateStressFromDispatcher() {
-  // Update stress engine with current dispatcher counters
-  _stress.updateFromDispatcher(
-    getTxDelaysDC() + getTxDelaysLBT() + getTxRetries() + 1,  // packets (approximate)
-    getTxRetries(),
-    getTxDelaysDC(),
-    getTxDelaysLBT()
-  );
+  // Update stress engine with real dispatcher counters
+  uint32_t n_packets = getNumSentFlood() + getNumSentDirect();
+  uint32_t n_retries = getTxRetries();
+  uint32_t n_dc_delays = getTxDelaysDC();
+  uint32_t n_lbt_delays = getTxDelaysLBT();
+  
+  _stress.updateFromDispatcher(n_packets, n_retries, n_dc_delays, n_lbt_delays);
 }
 
 void MyMesh::formatStressReply(char* reply, const char* args) {

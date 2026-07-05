@@ -84,8 +84,12 @@ void StressEngine::formatLocalStressReply(char* reply, uint8_t window) const {
   _applySmoothing(const_cast<StressWindow*>(w));
   
   sprintf(reply,
-    "{\"stress\":%.1f,\"status\":\"%s\","
-    "\"packets\":%u,\"retries\":%u,\"dc_delays\":%u,\"lbt_delays\":%u}",
+    "stress: %.1f\n"
+    "status: %s\n"
+    "packets: %u\n"
+    "retries: %u\n"
+    "dc_delays: %u\n"
+    "lbt_delays: %u",
     w->stress_smooth, status_emoji[w->status],
     w->packets, w->retries, w->dc_delays, w->lbt_delays);
 }
