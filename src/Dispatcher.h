@@ -123,6 +123,10 @@ class Dispatcher {
   bool  prev_isrecv_mode;
   uint32_t n_sent_flood, n_sent_direct;
   uint32_t n_recv_flood, n_recv_direct;
+  // Airtime monitoring counters (for stress/observability)
+  uint32_t n_tx_delays_dc;    // TX delayed due to duty cycle / airtime budget
+  uint32_t n_tx_delays_lbt;   // TX delayed due to LBT / channel busy
+  uint32_t n_tx_retries;      // TX retries (CAD busy)
   unsigned long tx_budget_ms;
   unsigned long last_budget_update;
   unsigned long duty_cycle_window_ms;
@@ -184,8 +188,13 @@ public:
   uint32_t getNumSentDirect() const { return n_sent_direct; }
   uint32_t getNumRecvFlood() const { return n_recv_flood; }
   uint32_t getNumRecvDirect() const { return n_recv_direct; }
+  // Airtime monitoring getters
+  uint32_t getTxDelaysDC() const { return n_tx_delays_dc; }
+  uint32_t getTxDelaysLBT() const { return n_tx_delays_lbt; }
+  uint32_t getTxRetries() const { return n_tx_retries; }
   void resetStats() {
     n_sent_flood = n_sent_direct = n_recv_flood = n_recv_direct = 0;
+    n_tx_delays_dc = n_tx_delays_lbt = n_tx_retries = 0;
     _err_flags = 0;
   }
 

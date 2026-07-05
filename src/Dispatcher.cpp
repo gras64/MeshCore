@@ -19,6 +19,7 @@ namespace mesh {
 void Dispatcher::begin() {
   n_sent_flood = n_sent_direct = 0;
   n_recv_flood = n_recv_direct = 0;
+  n_tx_delays_dc = n_tx_delays_lbt = n_tx_retries = 0;
   _err_flags = 0;
   radio_nonrx_start = _ms->getMillis();
 
@@ -278,6 +279,8 @@ void Dispatcher::checkSend() {
   
   uint32_t est_airtime = _radio->getEstAirtimeFor(MAX_TRANS_UNIT);
   if (tx_budget_ms < est_airtime / MIN_TX_BUDGET_AIRTIME_DIV) {
+    // Duty cycle / airtime budget limit reached - track as DC delay
+    n_tx_delays_dc++;
     float duty_cycle = 1.0f / (1.0f + getAirtimeBudgetFactor());
     unsigned long needed = est_airtime / MIN_TX_BUDGET_AIRTIME_DIV - tx_budget_ms;
     next_tx_time = futureMillis((unsigned long)(needed / duty_cycle));
@@ -297,6 +300,7 @@ void Dispatcher::checkSend() {
       // channel activity has gone on too long... (Radio might be in a bad state)
       // force the pending transmit below...
     } else {
+      n_tx_retries++;  // Track LBT/CAD retry
       next_tx_time = futureMillis(getCADFailRetryDelay());
       return;
     }

@@ -33,6 +33,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
+#include <helpers/StressEngine.h>
 #include "RateLimiter.h"
 
 #ifdef WITH_BRIDGE
@@ -113,6 +114,10 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t pending_sf;
   uint8_t pending_cr;
   int  matching_peer_indexes[MAX_CLIENTS];
+  // Stress / observability
+  StressEngine _stress;
+  unsigned long next_event_report;
+  uint32_t _last_tx_delays_dc, _last_tx_delays_lbt, _last_tx_retries;
 #if defined(WITH_RS232_BRIDGE)
   RS232Bridge bridge;
 #elif defined(WITH_ESPNOW_BRIDGE)
@@ -248,6 +253,11 @@ public:
 
   // To check if there is pending work
   bool hasPendingWork() const;
+
+  // Stress / observability
+  void updateStressFromDispatcher();
+  void formatStressReply(char* reply, const char* args);
+  void formatStressOverviewReply(char* reply, const char* args);
 
 #if defined(USE_SX1262) || defined(USE_SX1268)
   void setRxBoostedGain(bool enable) override;

@@ -666,6 +666,11 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _num_posted = _num_post_pushes = 0;
 
   memset(default_scope.key, 0, sizeof(default_scope.key));
+
+  // Stress engine init
+  _stress.begin(SMOOTH_BALANCED);
+  next_event_report = 0;
+  _last_tx_delays_dc = _last_tx_delays_lbt = _last_tx_retries = 0;
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
@@ -934,7 +939,49 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       Serial.printf("\n");
     }
     reply[0] = 0;
-  } else{
+  } else if (memcmp(command, "stress", 6) == 0) {
+    const char* sub = command + 6;
+    while (*sub == ' ') sub++;
+    
+    char args_buf[64];
+    strncpy(args_buf, sub, sizeof(args_buf) - 1);
+    args_buf[sizeof(args_buf) - 1] = 0;
+    
+    char* token = strtok(args_buf, " ");
+    char* node_arg = token;
+    token = strtok(NULL, " ");
+    char* window_arg = token;
+    
+    uint8_t window = 1;
+    if (window_arg) {
+      if (strcmp(window_arg, "live") == 0) window = 0;
+      else if (strcmp(window_arg, "weekly") == 0) window = 2;
+    }
+    
+    if (node_arg) {
+      // Node hash argument ignored - local node only
+      _stress.formatLocalStressReply(reply, window);
+    } else {
+      _stress.formatLocalStressReply(reply, window);
+    }
+  } else if (memcmp(command, "stress.smoothing", 16) == 0) {
+    const char* sub = command + 16;
+    while (*sub == ' ') sub++;
+    
+    if (strcmp(sub, "sharp") == 0) {
+      _stress.setSmoothing(SMOOTH_SHARP);
+      strcpy(reply, "OK - smoothing: sharp");
+    } else if (strcmp(sub, "stable") == 0) {
+      _stress.setSmoothing(SMOOTH_STABLE);
+      strcpy(reply, "OK - smoothing: stable");
+    } else {
+      _stress.setSmoothing(SMOOTH_BALANCED);
+      strcpy(reply, "OK - smoothing: balanced");
+    }
+  } else if (memcmp(command, "stress.clear", 12) == 0) {
+    _stress.clear();
+    strcpy(reply, "OK - stress data cleared");
+  } else {
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
@@ -1027,4 +1074,33 @@ void MyMesh::loop() {
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
+
+  // Update stress engine from dispatcher counters
+  updateStressFromDispatcher();
+}
+
+/* =========================== Stress / Observability =========================== */
+
+void MyMesh::updateStressFromDispatcher() {
+  // Update stress engine with current dispatcher counters
+  _stress.updateFromDispatcher(
+    getTxDelaysDC() + getTxDelaysLBT() + getTxRetries() + 1,  // packets (approximate)
+    getTxRetries(),
+    getTxDelaysDC(),
+    getTxDelaysLBT()
+  );
+}
+
+void MyMesh::formatStressReply(char* reply, const char* args) {
+  uint8_t window = 1;  // default: daily
+  if (args && *args) {
+    if (strcmp(args, "live") == 0) window = 0;
+    else if (strcmp(args, "weekly") == 0) window = 2;
+  }
+  _stress.formatLocalStressReply(reply, window);
+}
+
+void MyMesh::formatStressOverviewReply(char* reply, const char* args) {
+  // For local node, overview is the same as stress reply
+  formatStressReply(reply, args);
 }

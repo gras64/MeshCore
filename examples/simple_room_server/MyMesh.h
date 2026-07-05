@@ -21,6 +21,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/ClientACL.h>
 #include <helpers/RegionMap.h>
+#include <helpers/StressEngine.h>
 #include <RTClib.h>
 #include <target.h>
 
@@ -117,6 +118,10 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t pending_sf;
   uint8_t pending_cr;
   int  matching_peer_indexes[MAX_CLIENTS];
+  // Stress / observability
+  StressEngine _stress;
+  unsigned long next_event_report;
+  uint32_t _last_tx_delays_dc, _last_tx_delays_lbt, _last_tx_retries;
 
   void addPost(ClientInfo* client, const char* postData);
   void pushPostToClient(ClientInfo* client, PostInfo& post);
@@ -222,4 +227,9 @@ public:
   void clearStats() override;
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   void loop();
+
+  // Stress / observability
+  void updateStressFromDispatcher();
+  void formatStressReply(char* reply, const char* args);
+  void formatStressOverviewReply(char* reply, const char* args);
 };

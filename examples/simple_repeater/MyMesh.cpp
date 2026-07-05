@@ -775,6 +775,7 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
+  
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
       && !_prefs.disable_fwd && discover_limiter.allow(rtc_clock.getCurrentTime())
   ) {
@@ -922,6 +923,11 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   pending_discover_until = 0;
 
   memset(default_scope.key, 0, sizeof(default_scope.key));
+
+  // Stress engine init
+  _stress.begin(SMOOTH_BALANCED);
+  next_event_report = 0;
+  _last_tx_delays_dc = _last_tx_delays_lbt = _last_tx_retries = 0;
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
@@ -1257,7 +1263,56 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
-  } else{
+  } else if (memcmp(command, "stress", 6) == 0) {
+    // stress [node_hash] [live|daily|weekly]
+    const char* sub = command + 6;
+    while (*sub == ' ') sub++;
+    
+    char* node_arg = NULL;
+    char* window_arg = NULL;
+    
+    // Parse arguments
+    char args_buf[64];
+    strncpy(args_buf, sub, sizeof(args_buf) - 1);
+    args_buf[sizeof(args_buf) - 1] = 0;
+    
+    char* token = strtok(args_buf, " ");
+    if (token) node_arg = token;
+    token = strtok(NULL, " ");
+    if (token) window_arg = token;
+    
+    // Determine window
+    uint8_t window = 1;  // default: daily
+    if (window_arg) {
+      if (strcmp(window_arg, "live") == 0) window = 0;
+      else if (strcmp(window_arg, "weekly") == 0) window = 2;
+    }
+    
+    if (node_arg) {
+      // Node hash argument ignored - local node only
+      _stress.formatLocalStressReply(reply, window);
+    } else {
+      _stress.formatLocalStressReply(reply, window);
+    }
+  } else if (memcmp(command, "stress.smoothing", 16) == 0) {
+    // stress.smoothing [sharp|balanced|stable]
+    const char* sub = command + 16;
+    while (*sub == ' ') sub++;
+    
+    if (strcmp(sub, "sharp") == 0) {
+      _stress.setSmoothing(SMOOTH_SHARP);
+      strcpy(reply, "OK - smoothing: sharp");
+    } else if (strcmp(sub, "stable") == 0) {
+      _stress.setSmoothing(SMOOTH_STABLE);
+      strcpy(reply, "OK - smoothing: stable");
+    } else {
+      _stress.setSmoothing(SMOOTH_BALANCED);
+      strcpy(reply, "OK - smoothing: balanced");
+    }
+  } else if (memcmp(command, "stress.clear", 12) == 0) {
+    _stress.clear();
+    strcpy(reply, "OK - stress data cleared");
+  } else {
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
@@ -1305,6 +1360,9 @@ void MyMesh::loop() {
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
+
+  // Update stress engine from dispatcher counters
+  updateStressFromDispatcher();
 }
 
 // To check if there is pending work
@@ -1313,4 +1371,30 @@ bool MyMesh::hasPendingWork() const {
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
   return _mgr->getOutboundTotal() > 0;
+}
+
+/* =========================== Stress / Observability =========================== */
+
+void MyMesh::updateStressFromDispatcher() {
+  // Update stress engine with current dispatcher counters
+  _stress.updateFromDispatcher(
+    getTxDelaysDC() + getTxDelaysLBT() + getTxRetries() + 1,  // packets (approximate)
+    getTxRetries(),
+    getTxDelaysDC(),
+    getTxDelaysLBT()
+  );
+}
+
+void MyMesh::formatStressReply(char* reply, const char* args) {
+  uint8_t window = 1;  // default: daily
+  if (args && *args) {
+    if (strcmp(args, "live") == 0) window = 0;
+    else if (strcmp(args, "weekly") == 0) window = 2;
+  }
+  _stress.formatLocalStressReply(reply, window);
+}
+
+void MyMesh::formatStressOverviewReply(char* reply, const char* args) {
+  // For local node, overview is the same as stress reply
+  formatStressReply(reply, args);
 }
