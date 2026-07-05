@@ -16,26 +16,38 @@ void StressEngine::begin(uint8_t smoothing) {
   }
 }
 
-void StressEngine::updateFromDispatcher(uint32_t n_packets, uint32_t n_retries, uint32_t n_dc_delays, uint32_t n_lbt_delays) {
+void StressEngine::updateFromDispatcher(uint32_t n_packets, uint32_t n_retries, uint32_t n_dc_delays, uint32_t n_lbt_delays, uint32_t n_recv_errors) {
   // Simply store the current dispatcher counters - stress calculation happens on query
   for (int w = 0; w < 3; w++) {
     StressWindow* win = &_windows[w];
     win->packets = n_packets;
-    win->retries = n_retries;
     win->dc_delays = n_dc_delays;
     win->lbt_delays = n_lbt_delays;
+    win->recv_errors = n_recv_errors;
   }
 }
 
 void StressEngine::_calculateStress(StressWindow* w, uint8_t window) const {
-  uint16_t thresh = _getThreshold(window);
-  if (thresh == 0) thresh = 1;
+  // Calculate ratios (delays per packet sent)
+  float packets = (float)w->packets;
+  if (packets < 1.0f) packets = 1.0f;  // avoid division by zero
   
+  w->dc_ratio = (float)w->dc_delays / packets;
+  w->lbt_ratio = (float)w->lbt_delays / packets;
+  
+  // Calculate receive error rate (errors per total received)
+  float total_received = (float)w->packets + (float)w->recv_errors;
+  if (total_received < 1.0f) total_received = 1.0f;
+  w->recv_error_ratio = (float)w->recv_errors / total_received;
+  
+  // Calculate stress based on ratios
+  // Delays: 0 = 0 stress, 10+ delays/pkt = 100 stress
   float raw = 0;
-  raw += (float)w->packets / (float)thresh * W_PACKETS;
-  raw += (float)w->retries / (float)thresh * W_RETRIES;
-  raw += (float)w->dc_delays / (float)thresh * W_DC_DELAY;
-  raw += (float)w->lbt_delays / (float)thresh * W_LBT_DELAY;
+  raw += (w->dc_ratio / LBT_RATIO_RED_MAX) * 100.0f * (W_DC_DELAY / 1000.0f);
+  raw += (w->lbt_ratio / LBT_RATIO_RED_MAX) * 100.0f * (W_LBT_DELAY / 1000.0f);
+  
+  // Receive errors: 0% = 0 stress, 10% = 100 stress
+  raw += (w->recv_error_ratio / RECV_ERROR_RED_MAX) * 100.0f * (W_RECV_ERROR / 1000.0f);
   
   w->stress_raw = raw;
 }
@@ -55,15 +67,6 @@ void StressEngine::_applySmoothing(StressWindow* w) const {
   }
 }
 
-uint16_t StressEngine::_getThreshold(uint8_t window) const {
-  switch (window) {
-    case 0: return THRESH_PACKETS_LIVE;
-    case 1: return THRESH_PACKETS_DAILY;
-    case 2: return THRESH_PACKETS_WEEKLY;
-    default: return THRESH_PACKETS_DAILY;
-  }
-}
-
 float StressEngine::getStress(uint8_t window) const {
   const StressWindow* w = &_windows[window];
   _calculateStress(const_cast<StressWindow*>(w), window);
@@ -76,7 +79,6 @@ uint8_t StressEngine::getStatus(uint8_t window) const {
 }
 
 void StressEngine::formatLocalStressReply(char* reply, uint8_t window) const {
-  const char* window_name[] = {"live", "daily", "weekly"};
   const char* status_emoji[] = {"green", "yellow", "red"};
   
   const StressWindow* w = &_windows[window];
@@ -87,11 +89,14 @@ void StressEngine::formatLocalStressReply(char* reply, uint8_t window) const {
     "stress: %.1f\n"
     "status: %s\n"
     "packets: %u\n"
-    "retries: %u\n"
-    "dc_delays: %u\n"
-    "lbt_delays: %u",
+    "dc_delays: %u (%.2f/pkt)\n"
+    "lbt_delays: %u (%.2f/pkt)\n"
+    "recv_errors: %u (%.1f%%)",
     w->stress_smooth, status_emoji[w->status],
-    w->packets, w->retries, w->dc_delays, w->lbt_delays);
+    w->packets,
+    w->dc_delays, w->dc_ratio,
+    w->lbt_delays, w->lbt_ratio,
+    w->recv_errors, w->recv_error_ratio * 100.0f);
 }
 
 void StressEngine::clear() {

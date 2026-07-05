@@ -1370,11 +1370,11 @@ bool MyMesh::hasPendingWork() const {
 void MyMesh::updateStressFromDispatcher() {
   // Update stress engine with real dispatcher counters
   uint32_t n_packets = getNumSentFlood() + getNumSentDirect();
-  uint32_t n_retries = getTxRetries();
   uint32_t n_dc_delays = getTxDelaysDC();
   uint32_t n_lbt_delays = getTxDelaysLBT();
+  uint32_t n_recv_errors = radio_driver.getPacketsRecvErrors();
   
-  _stress.updateFromDispatcher(n_packets, n_retries, n_dc_delays, n_lbt_delays);
+  _stress.updateFromDispatcher(n_packets, 0, n_dc_delays, n_lbt_delays, n_recv_errors);
 }
 
 void MyMesh::formatStressReply(char* reply, const char* args) {
