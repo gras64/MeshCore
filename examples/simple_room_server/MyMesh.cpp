@@ -857,8 +857,17 @@ void MyMesh::formatRadioStatsReply(char *reply) {
 }
 
 void MyMesh::formatPacketStatsReply(char *reply) {
-  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(), 
+  // Build base packet stats JSON
+  char base[256];
+  StatsFormatHelper::formatPacketStats(base, radio_driver, getNumSentFlood(), getNumSentDirect(), 
                                        getNumRecvFlood(), getNumRecvDirect());
+  
+  // Append stress data as JSON fields (daily window)
+  char stress_json[128];
+  _stress.formatStressJsonFields(stress_json, 1);  // daily window
+  
+  // Combine into final JSON
+  sprintf(reply, "%s,%s", base, stress_json);
 }
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
