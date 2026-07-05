@@ -92,12 +92,10 @@ void StressEngine::formatLocalStressReply(char* reply) const {
   sprintf(reply,
     "stress: %.1f\n"
     "status: %s\n"
-    "packets: %u\n"
     "dc_delays: %u (%.2f/pkt)\n"
     "lbt_delays: %u (%.2f/pkt)\n"
     "recv_errors: %u (%.1f%%)",
     _window.stress_smooth, status_emoji[_window.status],
-    _window.packets,
     _window.dc_delays, _window.dc_ratio,
     _window.lbt_delays, _window.lbt_ratio,
     _window.recv_errors, _window.recv_error_ratio * 100.0f);
