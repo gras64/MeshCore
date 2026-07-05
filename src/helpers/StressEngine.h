@@ -76,9 +76,6 @@ public:
   // Get formatted JSON reply for local node
   void formatLocalStressReply(char* reply, uint8_t window) const;
 
-  // Get formatted JSON fields for stats integration
-  void formatStressJsonFields(char* reply, uint8_t window) const;
-
   // Clear all data
   void clear();
 

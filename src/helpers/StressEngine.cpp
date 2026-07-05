@@ -99,16 +99,6 @@ void StressEngine::formatLocalStressReply(char* reply, uint8_t window) const {
     w->recv_errors, w->recv_error_ratio * 100.0f);
 }
 
-void StressEngine::formatStressJsonFields(char* reply, uint8_t window) const {
-  const StressWindow* w = &_windows[window];
-  _calculateStress(const_cast<StressWindow*>(w), window);
-  _applySmoothing(const_cast<StressWindow*>(w));
-  
-  sprintf(reply,
-    "\"stress\":%.1f,\"stress_status\":%d,\"dc_ratio\":%.2f,\"lbt_ratio\":%.2f,\"recv_error_pct\":%.1f",
-    w->stress_smooth, w->status, w->dc_ratio, w->lbt_ratio, w->recv_error_ratio * 100.0f);
-}
-
 void StressEngine::clear() {
   memset(_windows, 0, sizeof(_windows));
 }
