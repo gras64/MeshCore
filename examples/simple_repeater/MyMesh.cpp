@@ -1147,23 +1147,6 @@ void MyMesh::onDefaultRegionChanged(const RegionEntry* r) {
 
 void MyMesh::formatStatsReply(char *reply) {
   StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
-  // Append stress status (green/yellow/red)
-  updateStressFromDispatcher();
-  char status_buf[128];
-  _stress.formatLocalStressReply(status_buf, 1);  // daily
-  // Extract just the status line
-  char* line = strtok(status_buf, "\n");
-  while (line) {
-    if (strncmp(line, "status:", 7) == 0) {
-      char* val = line + 7;
-      while (*val == ' ') val++;
-      char* nl = strchr(val, '\n');
-      if (nl) *nl = 0;
-      sprintf(reply + strlen(reply), ",\"stress_status\":\"%s\"", val);
-      break;
-    }
-    line = strtok(NULL, "\n");
-  }
 }
 
 void MyMesh::formatRadioStatsReply(char *reply) {
@@ -1171,8 +1154,17 @@ void MyMesh::formatRadioStatsReply(char *reply) {
 }
 
 void MyMesh::formatPacketStatsReply(char *reply) {
-  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(), 
+  // Build base packet stats JSON
+  char base[256];
+  StatsFormatHelper::formatPacketStats(base, radio_driver, getNumSentFlood(), getNumSentDirect(), 
                                        getNumRecvFlood(), getNumRecvDirect());
+  
+  // Append stress data as JSON fields (daily window)
+  char stress_json[128];
+  _stress.formatStressJsonFields(stress_json, 1);  // daily window
+  
+  // Combine into final JSON
+  sprintf(reply, "%s,%s", base, stress_json);
 }
 
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
