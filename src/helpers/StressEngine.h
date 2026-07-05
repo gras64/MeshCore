@@ -1,3 +1,7 @@
+// StressEngine - Local stress monitoring for MeshCore
+// Calculates stress from dispatcher counters (delays/errors per packet)
+// No time-windowing - reports current cumulative stress state
+
 #pragma once
 
 #include <Arduino.h>
@@ -6,11 +10,6 @@
 #define SMOOTH_SHARP      0    // reaktiv, wenig Glättung
 #define SMOOTH_BALANCED   1    // Standard
 #define SMOOTH_STABLE     2    // stark geglättet, trend-orientiert
-
-// Time window definitions (in seconds)
-#define WINDOW_LIVE       3600   // 1h
-#define WINDOW_DAILY      86400  // 24h
-#define WINDOW_WEEKLY     604800 // 7d
 
 // Stress threshold (normalized 0-100)
 #define STRESS_GREEN_MAX    20
@@ -42,7 +41,7 @@
 #define SMOOTH_BALANCED_FACTOR   0.1f
 #define SMOOTH_STABLE_FACTOR     0.03f
 
-// Local stress data point (per time window)
+// Local stress data point
 struct StressWindow {
   uint32_t packets;
   uint32_t dc_delays;
@@ -64,34 +63,33 @@ public:
   void begin(uint8_t smoothing = SMOOTH_BALANCED);
 
   // Update from dispatcher counters (local node only)
-  void updateFromDispatcher(uint32_t n_packets, uint32_t n_retries, uint32_t n_dc_delays, uint32_t n_lbt_delays, uint32_t n_recv_errors);
+  // Calculates stress and applies smoothing - no mutation on read
+  void updateFromDispatcher(uint32_t n_packets, uint32_t n_dc_delays, uint32_t n_lbt_delays, uint32_t n_recv_errors);
 
-  // Get stress level for local node (0-100)
-  // window: 0=live(1h), 1=daily(24h), 2=weekly(7d)
-  float getStress(uint8_t window) const;
+  // Get stress level for local node (0-100) - read-only
+  float getStress() const;
 
-  // Get status (0=green, 1=yellow, 2=red)
-  uint8_t getStatus(uint8_t window) const;
+  // Get status (0=green, 1=yellow, 2=red) - read-only
+  uint8_t getStatus() const;
 
-  // Get formatted JSON reply for local node
-  void formatLocalStressReply(char* reply, uint8_t window) const;
+  // Get formatted text reply for CLI (read-only)
+  void formatLocalStressReply(char* reply) const;
 
-  // Get formatted JSON fields for stats integration
-  void formatStressJsonFields(char* reply, uint8_t window) const;
+  // Get formatted JSON fields for stats integration (read-only)
+  void formatStressJsonFields(char* reply) const;
 
   // Clear all data
   void clear();
 
-  // Set smoothing mode
-  void setSmoothing(uint8_t mode) { _smoothing = mode; }
+  // Set smoothing mode (updates both mode and factor)
+  void setSmoothing(uint8_t mode);
   uint8_t getSmoothing() const { return _smoothing; }
 
 private:
-  StressWindow _windows[3]; // 0=live, 1=daily, 2=weekly
+  StressWindow _window;
   uint8_t _smoothing;
   float _smooth_factor;
 
-  void _calculateStress(StressWindow* w, uint8_t window) const;
-  void _applySmoothing(StressWindow* w) const;
-  uint16_t _getThreshold(uint8_t window) const;
+  void _calculateStress();
+  void _applySmoothing();
 };

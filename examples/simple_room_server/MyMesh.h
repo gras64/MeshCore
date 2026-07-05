@@ -120,8 +120,6 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   int  matching_peer_indexes[MAX_CLIENTS];
   // Stress / observability
   StressEngine _stress;
-  unsigned long next_event_report;
-  uint32_t _last_tx_delays_dc, _last_tx_delays_lbt, _last_tx_retries;
 
   void addPost(ClientInfo* client, const char* postData);
   void pushPostToClient(ClientInfo* client, PostInfo& post);

@@ -926,8 +926,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 
   // Stress engine init
   _stress.begin(SMOOTH_BALANCED);
-  next_event_report = 0;
-  _last_tx_delays_dc = _last_tx_delays_lbt = _last_tx_retries = 0;
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
@@ -1159,12 +1157,16 @@ void MyMesh::formatPacketStatsReply(char *reply) {
   StatsFormatHelper::formatPacketStats(base, radio_driver, getNumSentFlood(), getNumSentDirect(), 
                                        getNumRecvFlood(), getNumRecvDirect());
   
-  // Append stress data as JSON fields (daily window)
+  // Append stress data as JSON fields
   char stress_json[128];
-  _stress.formatStressJsonFields(stress_json, 1);  // daily window
+  _stress.formatStressJsonFields(stress_json);
   
-  // Combine into final JSON
-  sprintf(reply, "%s,%s", base, stress_json);
+  // Combine into valid JSON: remove closing '}' from base, append stress fields, add closing '}'
+  size_t base_len = strlen(base);
+  if (base_len > 0 && base[base_len - 1] == '}') {
+    base[base_len - 1] = 0;
+  }
+  sprintf(reply, "%s,%s}", base, stress_json);
 }
 
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
@@ -1184,6 +1186,7 @@ void MyMesh::clearStats() {
   radio_driver.resetStats();
   resetStats();
   ((SimpleMeshTables *)getTables())->resetStats();
+  _stress.clear();
 }
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
@@ -1273,28 +1276,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       strcpy(reply, "OK - Discover sent");
     }
   } else if (memcmp(command, "get stress", 10) == 0) {
-    // get stress [live|daily|weekly]
-    const char* sub = command + 10;
-    while (*sub == ' ') sub++;
-    
-    char* window_arg = NULL;
-    
-    // Parse arguments
-    char args_buf[64];
-    strncpy(args_buf, sub, sizeof(args_buf) - 1);
-    args_buf[sizeof(args_buf) - 1] = 0;
-    
-    char* token = strtok(args_buf, " ");
-    if (token) window_arg = token;
-    
-    // Determine window
-    uint8_t window = 1;  // default: daily
-    if (window_arg) {
-      if (strcmp(window_arg, "live") == 0) window = 0;
-      else if (strcmp(window_arg, "weekly") == 0) window = 2;
-    }
-    
-    _stress.formatLocalStressReply(reply, window);
+    // get stress - show current stress
+    _stress.formatLocalStressReply(reply);
   } else if (memcmp(command, "set stress.smoothing", 20) == 0) {
     // set stress.smoothing [sharp|balanced|stable]
     const char* sub = command + 20;
@@ -1383,16 +1366,11 @@ void MyMesh::updateStressFromDispatcher() {
   uint32_t n_lbt_delays = getTxDelaysLBT();
   uint32_t n_recv_errors = radio_driver.getPacketsRecvErrors();
   
-  _stress.updateFromDispatcher(n_packets, 0, n_dc_delays, n_lbt_delays, n_recv_errors);
+  _stress.updateFromDispatcher(n_packets, n_dc_delays, n_lbt_delays, n_recv_errors);
 }
 
 void MyMesh::formatStressReply(char* reply, const char* args) {
-  uint8_t window = 1;  // default: daily
-  if (args && *args) {
-    if (strcmp(args, "live") == 0) window = 0;
-    else if (strcmp(args, "weekly") == 0) window = 2;
-  }
-  _stress.formatLocalStressReply(reply, window);
+  _stress.formatLocalStressReply(reply);
 }
 
 void MyMesh::formatStressOverviewReply(char* reply, const char* args) {

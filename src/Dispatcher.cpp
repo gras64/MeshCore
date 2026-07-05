@@ -277,6 +277,10 @@ void Dispatcher::checkSend() {
   
   updateTxBudget();
   
+  if (!millisHasNowPassed(next_tx_time)) return;
+  
+  updateTxBudget();
+  
   uint32_t est_airtime = _radio->getEstAirtimeFor(MAX_TRANS_UNIT);
   if (tx_budget_ms < est_airtime / MIN_TX_BUDGET_AIRTIME_DIV) {
     // Duty cycle / airtime budget limit reached - track as DC delay
@@ -287,7 +291,6 @@ void Dispatcher::checkSend() {
     return;
   }
   
-  if (!millisHasNowPassed(next_tx_time)) return;
   if (_radio->isReceiving()) {
     if (cad_busy_start == 0) {
       cad_busy_start = _ms->getMillis();   // record when CAD busy state started
@@ -300,7 +303,8 @@ void Dispatcher::checkSend() {
       // channel activity has gone on too long... (Radio might be in a bad state)
       // force the pending transmit below...
     } else {
-      n_tx_retries++;  // Track LBT/CAD retry
+      n_tx_delays_lbt++;  // Track LBT/CAD delay
+      n_tx_retries++;     // Track LBT/CAD retry
       next_tx_time = futureMillis(getCADFailRetryDelay());
       return;
     }
