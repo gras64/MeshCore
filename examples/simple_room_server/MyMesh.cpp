@@ -1074,12 +1074,13 @@ void MyMesh::loop() {
 
 void MyMesh::updateStressFromDispatcher() {
   // Update stress engine with real dispatcher counters
-  uint32_t n_packets = getNumSentFlood() + getNumSentDirect();
+  uint32_t n_tx_packets = getNumSentFlood() + getNumSentDirect();
+  uint32_t n_rx_packets = getNumRecvFlood() + getNumRecvDirect();
   uint32_t n_dc_delays = getTxDelaysDC();
   uint32_t n_lbt_delays = getTxDelaysLBT();
   uint32_t n_recv_errors = radio_driver.getPacketsRecvErrors();
   
-  _stress.updateFromDispatcher(n_packets, n_dc_delays, n_lbt_delays, n_recv_errors);
+  _stress.updateFromDispatcher(n_tx_packets, n_rx_packets, n_dc_delays, n_lbt_delays, n_recv_errors);
 }
 
 void MyMesh::formatStressReply(char* reply, const char* args) {

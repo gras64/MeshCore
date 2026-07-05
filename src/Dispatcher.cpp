@@ -275,8 +275,6 @@ void Dispatcher::processRecvPacket(Packet* pkt) {
 void Dispatcher::checkSend() {
   if (_mgr->getOutboundCount(_ms->getMillis()) == 0) return;
   
-  updateTxBudget();
-  
   if (!millisHasNowPassed(next_tx_time)) return;
   
   updateTxBudget();

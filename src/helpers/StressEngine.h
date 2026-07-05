@@ -63,8 +63,9 @@ public:
   void begin(uint8_t smoothing = SMOOTH_BALANCED);
 
   // Update from dispatcher counters (local node only)
-  // Calculates stress and applies smoothing - no mutation on read
-  void updateFromDispatcher(uint32_t n_packets, uint32_t n_dc_delays, uint32_t n_lbt_delays, uint32_t n_recv_errors);
+  // n_tx_packets: sent packets (for delay ratios)
+  // n_rx_packets: received packets (for error rate calculation)
+  void updateFromDispatcher(uint32_t n_tx_packets, uint32_t n_rx_packets, uint32_t n_dc_delays, uint32_t n_lbt_delays, uint32_t n_recv_errors);
 
   // Get stress level for local node (0-100) - read-only
   float getStress() const;
@@ -90,6 +91,6 @@ private:
   uint8_t _smoothing;
   float _smooth_factor;
 
-  void _calculateStress();
+  void _calculateStress(float n_rx_packets);
   void _applySmoothing();
 };

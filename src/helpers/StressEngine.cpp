@@ -26,28 +26,28 @@ void StressEngine::setSmoothing(uint8_t mode) {
   }
 }
 
-void StressEngine::updateFromDispatcher(uint32_t n_packets, uint32_t n_dc_delays, uint32_t n_lbt_delays, uint32_t n_recv_errors) {
+void StressEngine::updateFromDispatcher(uint32_t n_tx_packets, uint32_t n_rx_packets, uint32_t n_dc_delays, uint32_t n_lbt_delays, uint32_t n_recv_errors) {
   // Store current dispatcher counters
-  _window.packets = n_packets;
+  _window.packets = n_tx_packets;
   _window.dc_delays = n_dc_delays;
   _window.lbt_delays = n_lbt_delays;
   _window.recv_errors = n_recv_errors;
   
   // Calculate stress and apply smoothing immediately
-  _calculateStress();
+  _calculateStress(n_rx_packets);
   _applySmoothing();
 }
 
-void StressEngine::_calculateStress() {
+void StressEngine::_calculateStress(float n_rx_packets) {
   // Calculate ratios (delays per packet sent)
-  float packets = (float)_window.packets;
-  if (packets < 1.0f) packets = 1.0f;  // avoid division by zero
+  float tx_packets = (float)_window.packets;
+  if (tx_packets < 1.0f) tx_packets = 1.0f;  // avoid division by zero
   
-  _window.dc_ratio = (float)_window.dc_delays / packets;
-  _window.lbt_ratio = (float)_window.lbt_delays / packets;
+  _window.dc_ratio = (float)_window.dc_delays / tx_packets;
+  _window.lbt_ratio = (float)_window.lbt_delays / tx_packets;
   
   // Calculate receive error rate (errors per total received)
-  float total_received = (float)_window.packets + (float)_window.recv_errors;
+  float total_received = n_rx_packets + (float)_window.recv_errors;
   if (total_received < 1.0f) total_received = 1.0f;
   _window.recv_error_ratio = (float)_window.recv_errors / total_received;
   
