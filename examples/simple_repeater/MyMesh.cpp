@@ -549,7 +549,8 @@ uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
   return getRNG()->nextInt(0, 5*t + 1);
 }
 
-mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
+bool MyMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
+  // just try to determine region for packet (apply later in allowPacketForward())
   if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
     recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
   } else if (pkt->getRouteType() == ROUTE_TYPE_FLOOD) {
@@ -561,7 +562,8 @@ mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
   } else {
     recv_pkt_region = NULL;
   }
-  return Mesh::onRecvPacket(pkt);
+  // do normal processing
+  return false;
 }
 
 void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const mesh::Identity &sender,
@@ -773,6 +775,7 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
+  
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
       && !_prefs.disable_fwd && discover_limiter.allow(rtc_clock.getCurrentTime())
   ) {
@@ -865,7 +868,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   set_radio_at = revert_radio_at = 0;
   _logging = false;
   region_load_active = false;
-  recv_pkt_region = NULL;
 
 #if MAX_NEIGHBOURS
   memset(neighbours, 0, sizeof(neighbours));
@@ -892,7 +894,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.flood_max_unscoped = 64;
   _prefs.flood_max_advert = 8;
   _prefs.interference_threshold = 0; // disabled
-  _prefs.cad_enabled = 0;            // hardware CAD before TX (off by default; 'set cad on')
 
   // bridge defaults
   _prefs.bridge_enabled = 1;    // enabled
@@ -917,12 +918,14 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.rx_boosted_gain = 1; // enabled by default;
 #endif
 #endif
-  _prefs.radio_fem_rxgain = 1;
 
   pending_discover_tag = 0;
   pending_discover_until = 0;
 
   memset(default_scope.key, 0, sizeof(default_scope.key));
+
+  // Stress engine init
+  _stress.begin(SMOOTH_BALANCED);
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
@@ -966,7 +969,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
-  board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain);
 
   updateAdvertTimer();
   updateFloodAdvertTimer();
@@ -1061,9 +1063,12 @@ void MyMesh::setTxPower(int8_t power_dbm) {
   radio_driver.setTxPower(power_dbm);
 }
 
+#if defined(USE_SX1262) || defined(USE_SX1268)
 bool MyMesh::setRxBoostedGain(bool enable) {
-  return radio_driver.setRxBoostedGainMode(enable);
+  radio_driver.setRxBoostedGainMode(enable);
+  return true;
 }
+#endif
 
 void MyMesh::formatNeighborsReply(char *reply) {
   char *dp = reply;
@@ -1148,8 +1153,25 @@ void MyMesh::formatRadioStatsReply(char *reply) {
 }
 
 void MyMesh::formatPacketStatsReply(char *reply) {
-  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(), 
+  // Build base packet stats JSON
+  char base[256];
+  StatsFormatHelper::formatPacketStats(base, radio_driver, getNumSentFlood(), getNumSentDirect(), 
                                        getNumRecvFlood(), getNumRecvDirect());
+  
+  // Append stress data as JSON fields
+  char stress_json[128];
+  _stress.formatStressJsonFields(stress_json);
+  
+  // Add ghost packets counter (separate from stress calculation)
+  char ghost_json[64];
+  sprintf(ghost_json, "\"ghost_packets\":%lu", (unsigned long)getGhostPackets());
+  
+  // Combine into valid JSON: remove closing '}' from base, append stress fields, add closing '}'
+  size_t base_len = strlen(base);
+  if (base_len > 0 && base[base_len - 1] == '}') {
+    base[base_len - 1] = 0;
+  }
+  sprintf(reply, "%s,%s,%s}", base, stress_json, ghost_json);
 }
 
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
@@ -1169,6 +1191,7 @@ void MyMesh::clearStats() {
   radio_driver.resetStats();
   resetStats();
   ((SimpleMeshTables *)getTables())->resetStats();
+  _stress.clear();
 }
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
@@ -1257,7 +1280,30 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
-  } else{
+  } else if (memcmp(command, "get stress", 10) == 0) {
+    // get stress [1h|24h|7d] - show stress for specified window
+    const char* args = command + 10;
+    while (*args == ' ') args++;
+    formatStressReply(reply, args);
+  } else if (memcmp(command, "set stress.smoothing", 20) == 0) {
+    // set stress.smoothing [sharp|balanced|stable]
+    const char* sub = command + 20;
+    while (*sub == ' ') sub++;
+    
+    if (strcmp(sub, "sharp") == 0) {
+      _stress.setSmoothing(SMOOTH_SHARP);
+      strcpy(reply, "OK - smoothing: sharp");
+    } else if (strcmp(sub, "stable") == 0) {
+      _stress.setSmoothing(SMOOTH_STABLE);
+      strcpy(reply, "OK - smoothing: stable");
+    } else {
+      _stress.setSmoothing(SMOOTH_BALANCED);
+      strcpy(reply, "OK - smoothing: balanced");
+    }
+  } else if (memcmp(command, "set stress.clear", 16) == 0) {
+    _stress.clear();
+    strcpy(reply, "OK - stress data cleared");
+  } else {
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
@@ -1305,6 +1351,9 @@ void MyMesh::loop() {
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
+
+  // Update stress engine from dispatcher counters
+  updateStressFromDispatcher();
 }
 
 // To check if there is pending work
@@ -1313,4 +1362,51 @@ bool MyMesh::hasPendingWork() const {
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
   return _mgr->getOutboundTotal() > 0;
+}
+
+/* =========================== Stress / Observability =========================== */
+
+void MyMesh::updateStressFromDispatcher() {
+  // Update stress engine with real dispatcher counters
+  uint32_t n_tx_packets = getNumSentFlood() + getNumSentDirect();
+  uint32_t n_rx_packets = getNumRecvFlood() + getNumRecvDirect();
+  uint32_t n_dc_delays = getTxDelaysDC();
+  uint32_t n_lbt_delays = getTxDelaysLBT();
+  uint32_t n_recv_errors = getRecvErrors();  // Parse errors
+  uint32_t n_sys_errors = getSysErrors();    // System errors (CAD timeouts, Rx timeouts)
+  uint32_t n_over_maxhops = getPacketsOverMaxHops();  // Packets exceeding flood.max
+  uint32_t n_ghost_packets = getGhostPackets();       // Ghost packets (parse failures) - SEPARATE!
+  uint32_t n_lbt_busy_ms = getLbtBusyMs();  // Total time medium was busy
+  
+  // Total errors = parse errors + system errors + long path packets
+  // Ghost packets are tracked separately and NOT included in stress calculation
+  uint32_t total_errors = n_recv_errors + n_sys_errors + n_over_maxhops;
+  
+  _stress.updateFromDispatcher(n_tx_packets, n_rx_packets, n_dc_delays, n_lbt_delays, total_errors, n_ghost_packets, n_lbt_busy_ms);
+}
+
+void MyMesh::formatStressReply(char* reply, const char* args) {
+  if (args && strlen(args) > 0) {
+    // Check for window specification
+    if (strstr(args, "1h") || strstr(args, "1H")) {
+      _stress.formatStress1H(reply);
+    } else if (strstr(args, "24h") || strstr(args, "24H")) {
+      _stress.formatStress24H(reply);
+    } else if (strstr(args, "7d") || strstr(args, "7D")) {
+      _stress.formatStress7D(reply);
+    } else if (strstr(args, "smooth") || strstr(args, "smooth")) {
+      // For smooth, show all windows
+      _stress.formatLocalStressReply(reply);
+    } else {
+      snprintf(reply, 128, "Usage: get stress [1h|24h|7d]");
+    }
+  } else {
+    // No args - show 1h by default
+    _stress.formatStress1H(reply);
+  }
+}
+
+void MyMesh::formatStressOverviewReply(char* reply, const char* args) {
+  // For local node, overview shows all windows
+  _stress.formatLocalStressReply(reply);
 }

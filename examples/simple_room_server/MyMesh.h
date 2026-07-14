@@ -21,6 +21,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/ClientACL.h>
 #include <helpers/RegionMap.h>
+#include <helpers/StressEngine.h>
 #include <RTClib.h>
 #include <target.h>
 
@@ -117,6 +118,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t pending_sf;
   uint8_t pending_cr;
   int  matching_peer_indexes[MAX_CLIENTS];
+  // Stress / observability
+  StressEngine _stress;
 
   void addPost(ClientInfo* client, const char* postData);
   void pushPostToClient(ClientInfo* client, PostInfo& post);
@@ -144,9 +147,6 @@ protected:
   int getInterferenceThreshold() const override {
     return _prefs.interference_threshold;
   }
-  bool getCADEnabled() const override {
-    return _prefs.cad_enabled;
-  }
   int getAGCResetInterval() const override {
     return ((int)_prefs.agc_reset_interval) * 4000;   // milliseconds
   }
@@ -154,7 +154,7 @@ protected:
     return _prefs.multi_acks;
   }
 
-  mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
+  bool filterRecvFloodPacket(mesh::Packet* pkt) override;
 
   bool allowPacketForward(const mesh::Packet* packet) override;
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
@@ -225,4 +225,9 @@ public:
   void clearStats() override;
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   void loop();
+
+  // Stress / observability
+  void updateStressFromDispatcher();
+  void formatStressReply(char* reply, const char* args);
+  void formatStressOverviewReply(char* reply, const char* args);
 };

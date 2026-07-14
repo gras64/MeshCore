@@ -33,6 +33,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
+#include <helpers/StressEngine.h>
 #include "RateLimiter.h"
 
 #ifdef WITH_BRIDGE
@@ -113,6 +114,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t pending_sf;
   uint8_t pending_cr;
   int  matching_peer_indexes[MAX_CLIENTS];
+  // Stress / observability
+  StressEngine _stress;
 #if defined(WITH_RS232_BRIDGE)
   RS232Bridge bridge;
 #elif defined(WITH_ESPNOW_BRIDGE)
@@ -150,9 +153,6 @@ protected:
   int getInterferenceThreshold() const override {
     return _prefs.interference_threshold;
   }
-  bool getCADEnabled() const override {
-    return _prefs.cad_enabled;
-  }
   int getAGCResetInterval() const override {
     return ((int)_prefs.agc_reset_interval) * 4000;   // milliseconds
   }
@@ -166,7 +166,7 @@ protected:
   }
 #endif
 
-  mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
+  bool filterRecvFloodPacket(mesh::Packet* pkt) override;
 
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
   int searchPeersByHash(const uint8_t* hash) override;
@@ -252,6 +252,12 @@ public:
   // To check if there is pending work
   bool hasPendingWork() const;
 
-  bool setRxBoostedGain(bool enable) override;
+  // Stress / observability
+  void updateStressFromDispatcher();
+  void formatStressReply(char* reply, const char* args);
+  void formatStressOverviewReply(char* reply, const char* args);
 
+#if defined(USE_SX1262) || defined(USE_SX1268)
+  bool setRxBoostedGain(bool enable) override;
+#endif
 };

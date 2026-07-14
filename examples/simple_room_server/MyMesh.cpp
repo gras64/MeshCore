@@ -290,7 +290,8 @@ bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
   return true;
 }
 
-mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
+bool MyMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
+  // just try to determine region for packet (apply later in allowPacketForward())
   if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
     recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
   } else if (pkt->getRouteType() == ROUTE_TYPE_FLOOD) {
@@ -302,7 +303,8 @@ mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
   } else {
     recv_pkt_region = NULL;
   }
-  return Mesh::onRecvPacket(pkt);
+  // do normal processing
+  return false;
 }
 
 void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const mesh::Identity &sender,
@@ -625,7 +627,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _logging = false;
   region_load_active = false;
   set_radio_at = revert_radio_at = 0;
-  recv_pkt_region = NULL;
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
@@ -649,7 +650,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.flood_max_unscoped = 64;
   _prefs.flood_max_advert = 8;
   _prefs.interference_threshold = 0; // disabled
-  _prefs.cad_enabled = 0;            // hardware CAD before TX (off by default; 'set cad on')
 #ifdef ROOM_PASSWORD
   StrHelper::strncpy(_prefs.guest_password, ROOM_PASSWORD, sizeof(_prefs.guest_password));
 #endif
@@ -658,7 +658,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
-  _prefs.radio_fem_rxgain = 1;
 
   next_post_idx = 0;
   next_client_idx = 0;
@@ -667,6 +666,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _num_posted = _num_post_pushes = 0;
 
   memset(default_scope.key, 0, sizeof(default_scope.key));
+
+  // Stress engine init
+  _stress.begin(SMOOTH_BALANCED);
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
@@ -700,7 +702,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
-  board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain);
 
   updateAdvertTimer();
   updateFloodAdvertTimer();
@@ -843,6 +844,7 @@ void MyMesh::clearStats() {
   radio_driver.resetStats();
   resetStats();
   ((SimpleMeshTables *)getTables())->resetStats();
+  _stress.clear();
 }
 
 void MyMesh::formatStatsReply(char *reply) {
@@ -854,8 +856,25 @@ void MyMesh::formatRadioStatsReply(char *reply) {
 }
 
 void MyMesh::formatPacketStatsReply(char *reply) {
-  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(), 
+  // Build base packet stats JSON
+  char base[256];
+  StatsFormatHelper::formatPacketStats(base, radio_driver, getNumSentFlood(), getNumSentDirect(), 
                                        getNumRecvFlood(), getNumRecvDirect());
+  
+  // Append stress data as JSON fields
+  char stress_json[128];
+  _stress.formatStressJsonFields(stress_json);
+  
+  // Add ghost packets counter (separate from stress calculation)
+  char ghost_json[64];
+  sprintf(ghost_json, "\"ghost_packets\":%lu", (unsigned long)getGhostPackets());
+  
+  // Combine into valid JSON: remove closing '}' from base, append stress fields, add closing '}'
+  size_t base_len = strlen(base);
+  if (base_len > 0 && base[base_len - 1] == '}') {
+    base[base_len - 1] = 0;
+  }
+  sprintf(reply, "%s,%s,%s}", base, stress_json, ghost_json);
 }
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
@@ -936,7 +955,28 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       Serial.printf("\n");
     }
     reply[0] = 0;
-  } else{
+  } else if (memcmp(command, "get stress", 10) == 0) {
+    // get stress - show current stress
+    _stress.formatLocalStressReply(reply);
+  } else if (memcmp(command, "set stress.smoothing", 20) == 0) {
+    // set stress.smoothing [sharp|balanced|stable]
+    const char* sub = command + 20;
+    while (*sub == ' ') sub++;
+    
+    if (strcmp(sub, "sharp") == 0) {
+      _stress.setSmoothing(SMOOTH_SHARP);
+      strcpy(reply, "OK - smoothing: sharp");
+    } else if (strcmp(sub, "stable") == 0) {
+      _stress.setSmoothing(SMOOTH_STABLE);
+      strcpy(reply, "OK - smoothing: stable");
+    } else {
+      _stress.setSmoothing(SMOOTH_BALANCED);
+      strcpy(reply, "OK - smoothing: balanced");
+    }
+  } else if (memcmp(command, "set stress.clear", 16) == 0) {
+    _stress.clear();
+    strcpy(reply, "OK - stress data cleared");
+  } else {
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
@@ -1029,4 +1069,22 @@ void MyMesh::loop() {
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
+
+  // Update stress engine from dispatcher counters
+  updateStressFromDispatcher();
+}
+
+/* =========================== Stress / Observability =========================== */
+
+// Stress monitoring disabled for room server
+void MyMesh::updateStressFromDispatcher() {
+  // Not implemented for room server
+}
+
+void MyMesh::formatStressReply(char* reply, const char* args) {
+  sprintf(reply, "Stress monitoring not available on room server");
+}
+
+void MyMesh::formatStressOverviewReply(char* reply, const char* args) {
+  sprintf(reply, "Stress monitoring not available on room server");
 }

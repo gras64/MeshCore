@@ -1,0 +1,72 @@
+; PlatformIO Project Configuration File for SeedStudio P1
+; MeshCore - LoRa Mesh Networking Library
+
+board = seedstudio_p1
+framework = arduino
+platform = nordicnrf52@~15.1.0
+monitor_speed = 115200
+
+; Use internal fork that includes patch to ble stack
+platform_packages =
+  framework-arduinoadafruitnrf52 @ https://github.com/meshcore-dev/Adafruit_nRF52_Arduino#d541301
+
+extra_scripts = create-uf2.py
+
+lib_deps =
+  SPI
+  Wire
+  jgromes/RadioLib @ ^7.6.0
+  rweather/Crypto @ ^0.4.0
+  adafruit/RTClib @ ^2.1.3
+  melopero/Melopero RV3028 @ ^1.1.0
+  electroniccats/CayenneLPP @ 1.6.1
+  https://github.com/oltaco/CustomLFS#0.2.2
+
+build_flags =
+  -w -DNDEBUG
+  -DRADIOLIB_STATIC_ONLY=1
+  -DRADIOLIB_GODMODE=1
+  -D NRF52_PLATFORM
+  -D LFS_NO_ASSERT=1
+  -D EXTRAFS=1
+  -D LORA_FREQ=868.3
+  -D LORA_BW=125
+  -D LORA_SF=9
+  -D LORA_CR=5
+  -D LORA_TX_POWER=17
+  -D MAX_CONTACTS=350
+  -D MAX_GROUP_CHANNELS=1
+  -D MAX_NEIGHBOURS=10
+  -D ADMIN_PASSWORD='"password"'
+  -D ROOM_PASSWORD='"mesh"'
+  -D ADVERT_NAME='"P1 Mesh"'
+  -D ADVERT_LAT=0.0
+  -D ADVERT_LON=0.0
+  -D ENABLE_ADVERT_ON_BOOT=1
+  -D ENABLE_PRIVATE_KEY_IMPORT=1
+  -D ENABLE_PRIVATE_KEY_EXPORT=1
+  -D RADIOLIB_EXCLUDE_CC1101=1
+  -D RADIOLIB_EXCLUDE_RF69=1
+  -D RADIOLIB_EXCLUDE_SX1231=1
+  -D RADIOLIB_EXCLUDE_SI443X=1
+  -D RADIOLIB_EXCLUDE_RFM2X=1
+  -D RADIOLIB_EXCLUDE_SX128X=1
+  -D RADIOLIB_EXCLUDE_AFSK=1
+  -D RADIOLIB_EXCLUDE_AX25=1
+  -D RADIOLIB_EXCLUDE_HELLSCHREIBER=1
+  -D RADIOLIB_EXCLUDE_MORSE=1
+  -D RADIOLIB_EXCLUDE_APRS=1
+  -D RADIOLIB_EXCLUDE_BELL=1
+  -D RADIOLIB_EXCLUDE_RTTY=1
+  -D RADIOLIB_EXCLUDE_SSTV=1
+
+build_src_filter =
+  +<../include/*.cpp>
+  +<../src/*.cpp>
+  +<../lib/ed25519/*.cpp>
+  +<../lib/nrf52/*.cpp>
+  +<helpers/*.cpp>
+  +<helpers/radiolib/*.cpp>
+  +<helpers/bridges/BridgeBase.cpp>
+  +<helpers/ui/MomentaryButton.cpp>
+  +<../examples/simple_repeater/*.cpp>

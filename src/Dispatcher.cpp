@@ -19,6 +19,9 @@ namespace mesh {
 void Dispatcher::begin() {
   n_sent_flood = n_sent_direct = 0;
   n_recv_flood = n_recv_direct = 0;
+  n_tx_delays_dc = n_tx_delays_lbt = n_tx_retries = 0;
+  n_recv_errors = 0;
+  n_lbt_busy_ms = 0;
   _err_flags = 0;
   radio_nonrx_start = _ms->getMillis();
 
@@ -66,7 +69,6 @@ uint32_t Dispatcher::getCADFailMaxDuration() const {
 void Dispatcher::loop() {
   if (millisHasNowPassed(next_floor_calib_time)) {
     _radio->triggerNoiseFloorCalibrate(getInterferenceThreshold());
-    _radio->setCADEnabled(getCADEnabled());
     next_floor_calib_time = futureMillis(NOISE_FLOOR_CALIB_INTERVAL);
   }
   _radio->loop();
@@ -81,6 +83,7 @@ void Dispatcher::loop() {
   }
   if (!is_recv && _ms->getMillis() - radio_nonrx_start > 8000) {   // radio has not been in Rx mode for 8 seconds!
     _err_flags |= ERR_EVENT_STARTRX_TIMEOUT;
+    n_sys_errors++;  // Count system error
   }
 
   if (outbound) {  // waiting for outbound send to be completed
@@ -169,6 +172,12 @@ bool Dispatcher::tryParsePacket(Packet* pkt, const uint8_t* raw, int len) {
     return false;
   }
 
+  uint8_t hop_count = pkt->path_len & 63;
+  if (hop_count > max_hop_limit) {
+    n_packets_over_maxhops++;  // Count packets exceeding max hop limit
+    MESH_DEBUG_PRINTLN("%s Dispatcher::checkRecv(): packet with %d hops (over limit %d)", getLogDateTime(), hop_count, max_hop_limit);
+  }
+
   uint8_t path_byte_len = (pkt->path_len & 63) * pkt->getPathHashSize();
   if (path_byte_len > MAX_PATH_SIZE || i + path_byte_len > len) {
     MESH_DEBUG_PRINTLN("%s Dispatcher::checkRecv(): partial or corrupt packet received, len=%d", getLogDateTime(), len);
@@ -210,6 +219,7 @@ void Dispatcher::checkRecv() {
         } else {
           _mgr->free(pkt);  // put back into pool
           pkt = NULL;
+          n_recv_errors++;  // Track parse failure as receive error
         }
       }
     } else {
@@ -275,17 +285,20 @@ void Dispatcher::processRecvPacket(Packet* pkt) {
 void Dispatcher::checkSend() {
   if (_mgr->getOutboundCount(_ms->getMillis()) == 0) return;
   
+  if (!millisHasNowPassed(next_tx_time)) return;
+  
   updateTxBudget();
   
   uint32_t est_airtime = _radio->getEstAirtimeFor(MAX_TRANS_UNIT);
   if (tx_budget_ms < est_airtime / MIN_TX_BUDGET_AIRTIME_DIV) {
+    // Duty cycle / airtime budget limit reached - track as DC delay
+    n_tx_delays_dc++;
     float duty_cycle = 1.0f / (1.0f + getAirtimeBudgetFactor());
     unsigned long needed = est_airtime / MIN_TX_BUDGET_AIRTIME_DIV - tx_budget_ms;
     next_tx_time = futureMillis((unsigned long)(needed / duty_cycle));
     return;
   }
   
-  if (!millisHasNowPassed(next_tx_time)) return;
   if (_radio->isReceiving()) {
     if (cad_busy_start == 0) {
       cad_busy_start = _ms->getMillis();   // record when CAD busy state started
@@ -293,16 +306,24 @@ void Dispatcher::checkSend() {
 
     if (_ms->getMillis() - cad_busy_start > getCADFailMaxDuration()) {
       _err_flags |= ERR_EVENT_CAD_TIMEOUT;
+      n_sys_errors++;  // Count system error
 
       MESH_DEBUG_PRINTLN("%s Dispatcher::checkSend(): CAD busy max duration reached!", getLogDateTime());
       // channel activity has gone on too long... (Radio might be in a bad state)
       // force the pending transmit below...
     } else {
+      n_tx_delays_lbt++;  // Track LBT/CAD delay
+      n_tx_retries++;     // Track LBT/CAD retry
       next_tx_time = futureMillis(getCADFailRetryDelay());
       return;
     }
   }
-  cad_busy_start = 0;  // reset busy state
+  
+  // Track LBT busy duration when CAD completes
+  if (cad_busy_start > 0) {
+    n_lbt_busy_ms += (_ms->getMillis() - cad_busy_start);
+    cad_busy_start = 0;
+  }
 
   outbound = _mgr->getNextOutbound(_ms->getMillis());
   if (outbound) {

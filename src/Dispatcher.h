@@ -125,6 +125,13 @@ class Dispatcher {
   bool  prev_isrecv_mode;
   uint32_t n_sent_flood, n_sent_direct;
   uint32_t n_recv_flood, n_recv_direct;
+  uint32_t n_tx_delays_dc, n_tx_delays_lbt, n_tx_retries;
+  uint32_t n_recv_errors;
+  uint32_t n_sys_errors;  // Counter for system errors (CAD timeouts, Rx timeouts, etc.)
+  uint32_t n_packets_over_maxhops;  // Counter for packets dropped due to >max_hops
+  uint32_t n_ghost_packets;  // Counter for ghost packets (parse failures)
+  uint32_t n_lbt_busy_ms;  // Total time medium was busy (ms)
+  uint8_t max_hop_limit;  // Maximum hop limit (from prefs.flood_max, default 23)
   unsigned long tx_budget_ms;
   unsigned long last_budget_update;
   unsigned long duty_cycle_window_ms;
@@ -152,6 +159,7 @@ protected:
     tx_budget_ms = 0;
     last_budget_update = 0;
     duty_cycle_window_ms = 3600000;
+    max_hop_limit = 23;  // Default max hops (can be overridden by Mesh)
   }
 
   virtual DispatcherAction onRecvPacket(Packet* pkt) = 0;
@@ -187,8 +195,18 @@ public:
   uint32_t getNumSentDirect() const { return n_sent_direct; }
   uint32_t getNumRecvFlood() const { return n_recv_flood; }
   uint32_t getNumRecvDirect() const { return n_recv_direct; }
+  uint32_t getTxDelaysDC() const { return n_tx_delays_dc; }
+  uint32_t getTxDelaysLBT() const { return n_tx_delays_lbt; }
+  uint32_t getTxRetries() const { return n_tx_retries; }
+  uint32_t getRecvErrors() const { return n_recv_errors; }
+  uint32_t getSysErrors() const { return n_sys_errors; }
+  uint32_t getPacketsOverMaxHops() const { return n_packets_over_maxhops; }
+  uint32_t getGhostPackets() const { return n_ghost_packets; }
+  uint32_t getLbtBusyMs() const { return n_lbt_busy_ms; }
+  void setMaxHopLimit(uint8_t limit) { max_hop_limit = limit; }
   void resetStats() {
     n_sent_flood = n_sent_direct = n_recv_flood = n_recv_direct = 0;
+    n_tx_delays_dc = n_tx_delays_lbt = n_tx_retries = n_recv_errors = n_sys_errors = n_packets_over_maxhops = n_ghost_packets = n_lbt_busy_ms = 0;
     _err_flags = 0;
   }
 
