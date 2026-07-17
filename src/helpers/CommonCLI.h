@@ -93,6 +93,10 @@ public:
   virtual void clearStats() = 0;
   virtual void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) = 0;
 
+  virtual void broadcastClockToNeighbours() {
+    // no op by default
+  }
+
   virtual void startRegionsLoad() {
     // no op by default
   }

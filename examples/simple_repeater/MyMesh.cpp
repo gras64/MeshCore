@@ -845,6 +845,21 @@ void MyMesh::sendNodeDiscoverReq() {
   }
 }
 
+void MyMesh::broadcastClockToNeighbours() {
+  uint32_t now = getRTCClock()->getCurrentTime();
+  uint8_t data[5];
+  data[0] = 0x02;  // CTL_TYPE_CLOCK_BROADCAST (custom control type)
+  memcpy(&data[1], &now, 4);
+
+  auto pkt = createControlData(data, sizeof(data));
+  if (pkt) {
+    MESH_DEBUG_PRINTLN("Broadcasting clock to neighbours: %lu", (unsigned long)now);
+    sendZeroHop(pkt);
+  } else {
+    MESH_DEBUG_PRINTLN("Failed to create clock broadcast packet");
+  }
+}
+
 MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondClock &ms, mesh::RNG &rng,
                mesh::RTCClock &rtc, mesh::MeshTables &tables)
     : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
